@@ -21,8 +21,12 @@ import com.ververica.flinktraining.exercises.datastream_java.datatypes.TaxiRide;
 import com.ververica.flinktraining.exercises.datastream_java.sources.TaxiFareSource;
 import com.ververica.flinktraining.exercises.datastream_java.sources.TaxiRideSource;
 import com.ververica.flinktraining.exercises.datastream_java.utils.ExerciseBase;
-import com.ververica.flinktraining.exercises.datastream_java.utils.MissingSolutionException;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
@@ -73,19 +77,43 @@ public class RidesAndFaresExercise extends ExerciseBase {
 		env.execute("Join Rides with Fares (java RichCoFlatMap)");
 	}
 
+	// 错误结果，答案见：RidesAndFaresSolution
 	public static class EnrichmentFunction extends RichCoFlatMapFunction<TaxiRide, TaxiFare, Tuple2<TaxiRide, TaxiFare>> {
+
+		ValueState<Tuple3<Long, TaxiRide, TaxiFare>> stat;
 
 		@Override
 		public void open(Configuration config) throws Exception {
-			throw new MissingSolutionException();
+			stat = getRuntimeContext().getState(new ValueStateDescriptor<Tuple3<Long, TaxiRide, TaxiFare>>("stat", TypeInformation.of(new TypeHint<Tuple3<Long, TaxiRide, TaxiFare>>() {
+			})));
 		}
 
 		@Override
 		public void flatMap1(TaxiRide ride, Collector<Tuple2<TaxiRide, TaxiFare>> out) throws Exception {
+			Tuple3<Long, TaxiRide, TaxiFare> value = stat.value();
+			if (value == null) {
+				value = new Tuple3<>();
+				value.f0 = ride.rideId;
+			}
+			value.f1 = ride;
+			stat.update(value);
+			if (value.f1 != null && value.f2 != null) {
+				out.collect(new Tuple2<>(value.f1, value.f2));
+			}
 		}
 
 		@Override
 		public void flatMap2(TaxiFare fare, Collector<Tuple2<TaxiRide, TaxiFare>> out) throws Exception {
+			Tuple3<Long, TaxiRide, TaxiFare> value = stat.value();
+			if (value == null) {
+				value = new Tuple3<>();
+				value.f0 = fare.rideId;
+			}
+			value.f2 = fare;
+			stat.update(value);
+			if (value.f1 != null && value.f2 != null) {
+				out.collect(new Tuple2<>(value.f1, value.f2));
+			}
 		}
 	}
 }
