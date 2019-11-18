@@ -16,15 +16,22 @@
 
 package com.ververica.flinktraining.exercises.datastream_java.basics;
 
-import com.ververica.flinktraining.exercises.datastream_java.sources.TaxiRideSource;
+import com.ververica.flinktraining.exercises.datastream_java.datatypes.EnrichedRide;
 import com.ververica.flinktraining.exercises.datastream_java.datatypes.TaxiRide;
+import com.ververica.flinktraining.exercises.datastream_java.sources.TaxiRideSource;
 import com.ververica.flinktraining.exercises.datastream_java.utils.ExerciseBase;
 import com.ververica.flinktraining.exercises.datastream_java.utils.GeoUtils;
-import com.ververica.flinktraining.exercises.datastream_java.utils.MissingSolutionException;
 import org.apache.flink.api.common.functions.FilterFunction;
+import org.apache.flink.api.common.functions.FlatMapFunction;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.util.Collector;
+import org.joda.time.Interval;
+import org.joda.time.Minutes;
 
 /**
  * The "Ride Cleansing" exercise from the Flink training
@@ -36,7 +43,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
  *   -input path-to-input-file
  *
  */
-public class RideCleansingExercise extends ExerciseBase {
+public class EnrichedRideCleansingExercise extends ExerciseBase {
 	public static void main(String[] args) throws Exception {
 
 		ParameterTool params = ParameterTool.fromArgs(args);
@@ -52,12 +59,34 @@ public class RideCleansingExercise extends ExerciseBase {
 		// start the data generator
 		DataStream<TaxiRide> rides = env.addSource(rideSourceOrTest(new TaxiRideSource(input, maxEventDelay, servingSpeedFactor)));
 
-		DataStream<TaxiRide> filteredRides = rides
+		SingleOutputStreamOperator<EnrichedRide> enrichRide = rides
 				// filter out rides that do not start or stop in NYC
-				.filter(new NYCFilter());
+				.filter(new NYCFilter())
+				.map(new MapFunction<TaxiRide, EnrichedRide>() {
+					@Override
+					public EnrichedRide map(TaxiRide taxiRide) throws Exception {
+						return new EnrichedRide(taxiRide);
+					}
+				});
+
+		enrichRide.keyBy(ride -> ride.startCell)
+				.flatMap(new FlatMapFunction<EnrichedRide, Tuple2<Integer, Minutes>>() {
+					@Override
+					public void flatMap(EnrichedRide ride, Collector<Tuple2<Integer, Minutes>> collector) throws Exception {
+						if (!ride.isStart) {
+							Interval rideInterval = new Interval(ride.startTime, ride.endTime);
+							Minutes duration = rideInterval.toDuration().toStandardMinutes();
+							collector.collect(new Tuple2<>(ride.startCell, duration));
+						}
+					}
+				})
+				.keyBy(0)
+				.maxBy(1)
+				.print();
+
 
 		// print the filtered stream
-		printOrTest(filteredRides);
+//		printOrTest(filteredRides);
 
 		// run the cleansing pipeline
 		env.execute("Taxi Ride Cleansing");
